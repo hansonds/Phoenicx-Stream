@@ -366,3 +366,67 @@ class ShelfRow extends StatelessWidget {
     );
   }
 }
+
+/// Round focusable icon button.
+class RoundIcon extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? tooltip;
+  final bool autofocus;
+  final double size;
+  const RoundIcon({
+    super.key,
+    required this.icon,
+    required this.onTap,
+    this.tooltip,
+    this.autofocus = false,
+    this.size = 46,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final child = FocusCard(
+      onTap: onTap,
+      autofocus: autofocus,
+      radius: size / 2,
+      focusScale: 1.08,
+      child: Container(
+        width: size,
+        height: size,
+        color: Colors.black.withOpacity(0.45),
+        child: Icon(icon, color: Colors.white, size: size * 0.52),
+      ),
+    );
+    return tooltip == null ? child : Tooltip(message: tooltip!, child: child);
+  }
+}
+
+/// Back + Home buttons shown at the top of every inner screen.
+class NavButtons extends StatelessWidget {
+  final VoidCallback? onBack;
+  final VoidCallback? onHome;
+  const NavButtons({super.key, this.onBack, this.onHome});
+
+  static void goHome(BuildContext context) =>
+      Navigator.of(context).popUntil((r) => r.isFirst);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        RoundIcon(
+          icon: Icons.arrow_back_rounded,
+          tooltip: 'Back',
+          onTap: onBack ?? () => Navigator.of(context).maybePop(),
+        ),
+        const SizedBox(width: 10),
+        RoundIcon(
+          icon: Icons.home_rounded,
+          tooltip: 'Home',
+          onTap: onHome ?? () => goHome(context),
+        ),
+      ],
+    );
+  }
+}

@@ -136,6 +136,17 @@ class TmdbApi {
     return found;
   }
 
+  /// Search for the manual "Fix match" screen.
+  static Future<List<TmdbInfo>> search(String query, {required bool tv, int? year}) async {
+    final res = await _get(tv ? '/search/tv' : '/search/movie', {
+      'query': query,
+      if (year != null) (tv ? 'first_air_date_year' : 'year'): '$year',
+      'include_adult': 'false',
+    });
+    final list = ((res['results'] as List?) ?? const []).whereType<Map>();
+    return list.map((m) => tv ? _tvInfo(m) : _movieInfo(m)).take(30).toList();
+  }
+
   static final Map<String, List<TmdbEpisode>> _seasonCache = {};
 
   /// Episode names, overviews and stills for one season.

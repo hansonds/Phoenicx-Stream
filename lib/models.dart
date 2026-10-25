@@ -124,6 +124,9 @@ class TmdbInfo {
 class Movie {
   final TmdbInfo info;
   final List<MediaFile> files = [];
+
+  /// Library groups (parsed titles) that ended up in this movie. Used by "Fix match".
+  final Set<String> groupKeys = {};
   Movie(this.info);
 
   DateTime get added =>
@@ -142,6 +145,9 @@ class EpisodeFile {
 class Show {
   final TmdbInfo info;
   final List<EpisodeFile> episodes = [];
+
+  /// Library groups (parsed titles) that ended up in this show. Used by "Fix match".
+  final Set<String> groupKeys = {};
   Show(this.info);
 
   DateTime get added => episodes
@@ -161,6 +167,33 @@ class Show {
     }
     final keys = map.keys.toList()..sort();
     return {for (final k in keys) k: map[k]!};
+  }
+}
+
+/// Files TMDB could not identify, grouped by parsed title. A TV show stays
+/// one group with all its seasons, so it can be matched in one go.
+class UnmatchedGroup {
+  final String key;
+  final String title;
+  final int? year;
+  final bool isShow;
+  final List<MediaFile> files = [];
+
+  /// season -> episode numbers (only for shows)
+  final Map<int, Set<int>> seasons = {};
+
+  UnmatchedGroup({required this.key, required this.title, this.year, required this.isShow});
+
+  DateTime get added =>
+      files.map((f) => f.added).reduce((a, b) => a.isAfter(b) ? a : b);
+
+  int get size => files.fold(0, (a, f) => a + f.size);
+
+  String get summary {
+    if (!isShow) return files.length == 1 ? '1 file' : '${files.length} files';
+    final ss = seasons.keys.toList()..sort();
+    final eps = seasons.values.fold<int>(0, (a, s) => a + s.length);
+    return '${ss.length} season${ss.length == 1 ? '' : 's'} (${ss.map((s) => 'S$s').join(', ')}) • $eps episodes';
   }
 }
 

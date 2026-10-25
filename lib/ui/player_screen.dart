@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -12,6 +13,7 @@ import '../models.dart';
 import '../services/settings.dart';
 import '../services/torbox.dart';
 import 'theme.dart';
+import 'widgets.dart';
 
 /// Full-screen player. Works with touch, mouse/keyboard and TV remote.
 class PlayerScreen extends StatefulWidget {
@@ -60,6 +62,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration _dur = Duration.zero;
   bool _playing = false;
   bool _buffering = false;
+  double _volume = AppSettings.volume.clamp(0, 150).toDouble();
+  bool _muted = false;
+  double _audioDelay = 0;
   final List<StreamSubscription> _subs = [];
 
   static bool get _isDesktop => !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
@@ -112,6 +117,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           'demuxer-readahead-secs': '60',
           'network-timeout': '60',
           'sub-auto': 'fuzzy',
+          'volume-max': '150',
         }.entries) {
           try {
             await (platform as dynamic).setProperty(e.key, e.value);
@@ -119,6 +125,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
       }
       await _player.open(Media(url));
+      await _applyVolume();
+      if (_audioDelay != 0) await _setProp('audio-delay', _audioDelay.toStringAsFixed(2));
       final saved = AppSettings.positionOf(_item.file.key);
       if (resume && saved != null && saved > const Duration(seconds: 30)) {
         try {
@@ -231,6 +239,55 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {});
   }
 
+  // ---------- sound ----------
+  Future<void> _setProp(String name, String value) async {
+    final platform = _player.platform;
+    if (platform == null) return;
+    try {
+      await (platform as dynamic).setProperty(name, value);
+    } catch (_) {}
+  }
+
+  Future<void> _applyVolume() async {
+    final v = _muted ? 0.0 : _volume;
+    try {
+      await _player.setVolume(v.clamp(0, 100).toDouble());
+    } catch (_) {}
+    // Above 100 % (boost) is set straight on mpv.
+    if (v > 100) await _setProp('volume', v.toStringAsFixed(0));
+  }
+
+  void _changeVolume(double delta) {
+    setState(() {
+      _muted = false;
+      _volume = (_volume + delta).clamp(0, 150).toDouble();
+    });
+    AppSettings.volume = _volume;
+    _applyVolume();
+    _flash('Volume ${_volume.round()}%${_volume > 100 ? '  (boost)' : ''}');
+  }
+
+  void _toggleMute() {
+    setState(() => _muted = !_muted);
+    _applyVolume();
+    _flash(_muted ? 'Muted' : 'Volume ${_volume.round()}%');
+  }
+
+  void _changeDelay(double delta) {
+    setState(() => _audioDelay = delta == 0 ? 0 : ((_audioDelay + delta) * 10).round() / 10);
+    _setProp('audio-delay', _audioDelay.toStringAsFixed(2));
+    _flash('Audio delay ${_audioDelay >= 0 ? '+' : ''}${_audioDelay.toStringAsFixed(1)} s');
+  }
+
+  Future<void> _goHome() async {
+    await _saveProgress();
+    if (_fullscreen) {
+      await windowManager.setFullScreen(false);
+      _fullscreen = false;
+    }
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
   Future<void> _exit() async {
     await _saveProgress();
     if (_fullscreen) {
@@ -273,6 +330,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
       } else {
         _exit();
       }
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.keyM) {
+      _toggleMute();
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.equal || k == LogicalKeyboardKey.add || k == LogicalKeyboardKey.numpadAdd) {
+      _changeVolume(5);
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.minus || k == LogicalKeyboardKey.numpadSubtract) {
+      _changeVolume(-5);
+      return KeyEventResult.handled;
+    }
+    if (_isDesktop && !_controls &&
+        (k == LogicalKeyboardKey.arrowUp || k == LogicalKeyboardKey.arrowDown)) {
+      _changeVolume(k == LogicalKeyboardKey.arrowUp ? 5 : -5);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.keyF && _isDesktop) {
@@ -327,17 +401,130 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return parts.isEmpty ? 'Track ${i + 1}' : parts.join('  •  ');
   }
 
-  Future<void> _pickAudio() async {
+  /// Sound panel: volume, mute, boost, audio delay and audio track.
+  Future<void> _soundPanel() async {
     _hideTimer?.cancel();
     final tracks = _player.state.tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList();
-    final current = _player.state.track.audio;
-    await _pickFrom(
-      'Audio',
-      [
-        for (var i = 0; i < tracks.length; i++)
-          _Choice(_trackLabel(tracks[i].id, tracks[i].title, tracks[i].language, i),
-              tracks[i].id == current.id, () => _player.setAudioTrack(tracks[i])),
-      ],
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          void run(VoidCallback f) {
+            f();
+            setD(() {});
+          }
+
+          final current = _player.state.track.audio;
+          return AlertDialog(
+            backgroundColor: PX.surface,
+            title: const Row(children: [
+              Icon(Icons.volume_up_rounded, color: PX.accent),
+              SizedBox(width: 10),
+              Text('Sound'),
+            ]),
+            content: SizedBox(
+              width: 460,
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  const Text('Volume', style: TextStyle(color: PX.muted)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      RoundIcon(icon: Icons.remove_rounded, autofocus: true,
+                          onTap: () => run(() => _changeVolume(-5))),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(_muted ? 'Muted' : '${_volume.round()}%',
+                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: _muted ? 0 : _volume / 150,
+                                minHeight: 6,
+                                backgroundColor: Colors.white12,
+                                color: _volume > 100 ? PX.accent2 : PX.accent,
+                              ),
+                            ),
+                            if (_volume > 100 && !_muted)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 4),
+                                child: Text('Boost on', style: TextStyle(color: PX.accent2, fontSize: 12)),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      RoundIcon(icon: Icons.add_rounded, onTap: () => run(() => _changeVolume(5))),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      PillButton(
+                        label: _muted ? 'Unmute' : 'Mute',
+                        icon: _muted ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                        selected: _muted,
+                        onTap: () => run(_toggleMute),
+                      ),
+                      PillButton(label: '50%', onTap: () => run(() => _changeVolume(50 - _volume))),
+                      PillButton(label: '100%', onTap: () => run(() => _changeVolume(100 - _volume))),
+                      PillButton(label: 'Boost 150%', onTap: () => run(() => _changeVolume(150 - _volume))),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Audio sync (if voice and lips do not match)', style: TextStyle(color: PX.muted)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      RoundIcon(icon: Icons.remove_rounded, onTap: () => run(() => _changeDelay(-0.1))),
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            '${_audioDelay >= 0 ? '+' : ''}${_audioDelay.toStringAsFixed(1)} s',
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                      RoundIcon(icon: Icons.add_rounded, onTap: () => run(() => _changeDelay(0.1))),
+                      const SizedBox(width: 10),
+                      PillButton(label: 'Reset', onTap: () => run(() => _changeDelay(0))),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Audio track', style: TextStyle(color: PX.muted)),
+                  const SizedBox(height: 4),
+                  if (tracks.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Text('Only one audio track'),
+                    ),
+                  for (var i = 0; i < tracks.length; i++)
+                    ListTile(
+                      leading: Icon(
+                        tracks[i].id == current.id ? Icons.radio_button_checked : Icons.radio_button_off,
+                        color: tracks[i].id == current.id ? PX.accent : PX.muted,
+                      ),
+                      title: Text(_trackLabel(tracks[i].id, tracks[i].title, tracks[i].language, i)),
+                      onTap: () async {
+                        await _player.setAudioTrack(tracks[i]);
+                        setD(() {});
+                      },
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              PillButton(label: 'Close', onTap: () => Navigator.of(ctx).pop()),
+            ],
+          );
+        },
+      ),
     );
     _scheduleHide();
   }
@@ -434,7 +621,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
           focusNode: _rootFocus,
           autofocus: true,
           onKeyEvent: _onKey,
-          child: MouseRegion(
+          child: Listener(
+            onPointerSignal: (ev) {
+              if (ev is PointerScrollEvent) _changeVolume(ev.scrollDelta.dy < 0 ? 5 : -5);
+            },
+            child: MouseRegion(
             onHover: (_) {
               if (!_controls) _showControls();
               else _scheduleHide();
@@ -483,6 +674,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ],
               ),
             ),
+          ),
           ),
         ),
       ),
@@ -539,6 +731,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
               Row(
                 children: [
                   _CtlButton(icon: Icons.arrow_back, onTap: _exit),
+                  const SizedBox(width: 10),
+                  _CtlButton(icon: Icons.home_rounded, onTap: _goHome),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
@@ -596,7 +790,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     ),
                   ],
                   const Spacer(),
-                  _CtlButton(icon: Icons.audiotrack_rounded, onTap: _pickAudio),
+                  _CtlButton(
+                    icon: _muted
+                        ? Icons.volume_off_rounded
+                        : (_volume > 100 ? Icons.campaign_rounded : Icons.volume_up_rounded),
+                    onTap: _soundPanel,
+                  ),
                   const SizedBox(width: 10),
                   _CtlButton(icon: Icons.subtitles_rounded, onTap: _pickSubtitle),
                   if (_isDesktop) ...[

@@ -22,9 +22,12 @@ class Library extends ChangeNotifier {
 
   List<Movie> movies = [];
   List<Show> shows = [];
-  List<MediaFile> others = [];
+  List<UnmatchedGroup> unmatched = [];
 
-  bool get isEmpty => movies.isEmpty && shows.isEmpty && others.isEmpty;
+  /// Last file list from TorBox, kept so manual matches apply instantly.
+  List<MediaFile> _files = [];
+
+  bool get isEmpty => movies.isEmpty && shows.isEmpty && unmatched.isEmpty;
 
   bool _busy = false;
 
@@ -33,10 +36,10 @@ class Library extends ChangeNotifier {
     final snap = AppSettings.librarySnapshot;
     if (snap != null && isEmpty) {
       try {
-        final files = (jsonDecode(snap) as List)
+        _files = (jsonDecode(snap) as List)
             .map((e) => MediaFile.fromJson(e as Map<String, dynamic>))
             .toList();
-        await _build(files, quiet: true);
+        await _build(_files, quiet: true);
       } catch (_) {}
     }
     await refresh();
@@ -51,6 +54,7 @@ class Library extends ChangeNotifier {
     notifyListeners();
     try {
       final files = await TorBoxApi.fetchAllVideoFiles();
+      _files = files;
       await AppSettings.saveLibrarySnapshot(jsonEncode(files.map((f) => f.toJson()).toList()));
       await _build(files);
       status = LibraryStatus.ready;
@@ -64,6 +68,29 @@ class Library extends ChangeNotifier {
     }
   }
 
+  /// Saves a manual match for one or more groups and rebuilds right away.
+  /// [kind] is 'movie' or 'tv'. Pass info = null to undo a manual match.
+  Future<void> setManualMatch(Iterable<String> groupKeys, String kind, TmdbInfo? info) async {
+    for (final k in groupKeys) {
+      await AppSettings.setOverride(
+          k, info == null ? null : {'kind': kind, 'info': info.toJson()});
+    }
+    await _build(_files, quiet: true);
+    notifyListeners();
+  }
+
+  /// Marks groups as "not a match" so they move to Unmatched.
+  Future<void> unmatch(Iterable<String> groupKeys) async {
+    for (final k in groupKeys) {
+      await AppSettings.setOverride(k, {'kind': 'none'});
+    }
+    await _build(_files, quiet: true);
+    notifyListeners();
+  }
+
+  static bool hasOverride(Iterable<String> keys) =>
+      keys.any((k) => AppSettings.overrides.containsKey(k));
+
   Future<void> _build(List<MediaFile> files, {bool quiet = false}) async {
     // Group files by parsed title so each title is looked up once.
     final movieGroups = <String, _Group>{};
@@ -71,21 +98,24 @@ class Library extends ChangeNotifier {
     for (final f in files) {
       final p = NameParser.parseFile(f.fileName, f.fullPath, f.itemName);
       if (p.title.isEmpty) {
-        movieGroups.putIfAbsent('?${f.key}', () => _Group('', null)).files.add(_PF(f, p));
+        movieGroups
+            .putIfAbsent('?${f.key}', () => _Group('?${f.key}', f.fileName, null, false))
+            .files
+            .add(_PF(f, p));
         continue;
       }
       final norm = NameParser.normalize(p.title);
       if (p.isEpisode) {
-        showGroups.putIfAbsent(norm, () => _Group(p.title, p.year)).files.add(_PF(f, p));
+        final k = 't|$norm';
+        showGroups.putIfAbsent(k, () => _Group(k, p.title, p.year, true)).files.add(_PF(f, p));
       } else {
-        movieGroups
-            .putIfAbsent('$norm|${p.year ?? ''}', () => _Group(p.title, p.year))
-            .files
-            .add(_PF(f, p));
+        final k = 'm|$norm|${p.year ?? ''}';
+        movieGroups.putIfAbsent(k, () => _Group(k, p.title, p.year, false)).files.add(_PF(f, p));
       }
     }
 
-    final total = movieGroups.length + showGroups.length;
+    final allGroups = [...movieGroups.values, ...showGroups.values];
+    final total = allGroups.length;
     var done = 0;
     void tick() {
       done++;
@@ -97,39 +127,76 @@ class Library extends ChangeNotifier {
 
     final movieMap = <int, Movie>{};
     final showMap = <int, Show>{};
-    final unmatched = <MediaFile>[];
+    final unmatchedGroups = <UnmatchedGroup>[];
+
+    void addAsMovie(_Group g, TmdbInfo info) {
+      final m = movieMap.putIfAbsent(info.id, () => Movie(info));
+      m.files.addAll(g.files.map((e) => e.file));
+      m.groupKeys.add(g.key);
+    }
+
+    void addAsShow(_Group g, TmdbInfo info) {
+      final s = showMap.putIfAbsent(info.id, () => Show(info));
+      s.groupKeys.add(g.key);
+      if (g.isShow) {
+        for (final pf in g.files) {
+          s.episodes.add(EpisodeFile(pf.parsed.season!, pf.parsed.episode!, pf.file));
+        }
+      } else {
+        // Files without SxxEyy forced into a show: number them in name order.
+        final sorted = [...g.files]..sort((a, b) => a.file.fileName.compareTo(b.file.fileName));
+        for (var i = 0; i < sorted.length; i++) {
+          s.episodes.add(EpisodeFile(1, i + 1, sorted[i].file));
+        }
+      }
+    }
+
+    void addUnmatched(_Group g) {
+      final u = UnmatchedGroup(key: g.key, title: g.title, year: g.year, isShow: g.isShow);
+      for (final pf in g.files) {
+        u.files.add(pf.file);
+        if (g.isShow) u.seasons.putIfAbsent(pf.parsed.season!, () => {}).add(pf.parsed.episode!);
+      }
+      unmatchedGroups.add(u);
+    }
 
     final tasks = <Future<void> Function()>[];
-    for (final g in movieGroups.values) {
+    for (final g in allGroups) {
       tasks.add(() async {
+        // 1. A match the user picked by hand always wins.
+        final o = AppSettings.overrides[g.key];
+        if (o is Map) {
+          final kind = o['kind'];
+          if (kind == 'none') {
+            addUnmatched(g);
+          } else if (o['info'] is Map) {
+            final info = TmdbInfo.fromJson(Map<String, dynamic>.from(o['info'] as Map));
+            if (kind == 'tv') {
+              addAsShow(g, info);
+            } else {
+              addAsMovie(g, info);
+            }
+          } else {
+            addUnmatched(g);
+          }
+          tick();
+          return;
+        }
+        // 2. Automatic TMDB search.
         TmdbInfo? info;
-        if (g.title.isNotEmpty) {
+        if (!g.key.startsWith('?')) {
           try {
-            info = await TmdbApi.findMovie(g.title, g.year);
+            info = g.isShow
+                ? await TmdbApi.findShow(g.title, g.year)
+                : await TmdbApi.findMovie(g.title, g.year);
           } catch (_) {}
         }
         if (info == null) {
-          unmatched.addAll(g.files.map((e) => e.file));
+          addUnmatched(g);
+        } else if (g.isShow) {
+          addAsShow(g, info);
         } else {
-          final m = movieMap.putIfAbsent(info.id, () => Movie(info!));
-          m.files.addAll(g.files.map((e) => e.file));
-        }
-        tick();
-      });
-    }
-    for (final g in showGroups.values) {
-      tasks.add(() async {
-        TmdbInfo? info;
-        try {
-          info = await TmdbApi.findShow(g.title, g.year);
-        } catch (_) {}
-        if (info == null) {
-          unmatched.addAll(g.files.map((e) => e.file));
-        } else {
-          final s = showMap.putIfAbsent(info.id, () => Show(info!));
-          for (final pf in g.files) {
-            s.episodes.add(EpisodeFile(pf.parsed.season!, pf.parsed.episode!, pf.file));
-          }
+          addAsMovie(g, info);
         }
         tick();
       });
@@ -146,7 +213,7 @@ class Library extends ChangeNotifier {
         return c != 0 ? c : a.episode.compareTo(b.episode);
       });
     }
-    others = unmatched..sort((a, b) => b.added.compareTo(a.added));
+    unmatched = unmatchedGroups..sort((a, b) => b.added.compareTo(a.added));
     if (quiet) {
       status = LibraryStatus.ready;
       notifyListeners();
@@ -165,12 +232,12 @@ class Library extends ChangeNotifier {
     await Future.wait(List.generate(size, (_) => worker()));
   }
 
-  /// Rebuilds after clearing TMDB matches (e.g. after changing language).
+  /// Rebuilds after clearing automatic TMDB matches (manual ones are kept).
   Future<void> rematch() async {
     await AppSettings.clearMatchCache();
     movies = [];
     shows = [];
-    others = [];
+    unmatched = [];
     await refresh();
   }
 }
@@ -182,8 +249,10 @@ class _PF {
 }
 
 class _Group {
+  final String key;
   final String title;
   final int? year;
+  final bool isShow;
   final List<_PF> files = [];
-  _Group(this.title, this.year);
+  _Group(this.key, this.title, this.year, this.isShow);
 }

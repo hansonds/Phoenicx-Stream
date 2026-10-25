@@ -5,6 +5,7 @@ import '../services/library.dart';
 import '../services/settings.dart';
 import '../services/tmdb.dart';
 import 'detail_screens.dart';
+import 'match_screen.dart';
 import 'player_screen.dart';
 import 'settings_screen.dart';
 import 'theme.dart';
@@ -127,7 +128,13 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      // Back on a tab returns to Home first, then exits the app.
+      canPop: _tab == _Tab.home,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _tab = _Tab.home);
+      },
+      child: Scaffold(
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -139,6 +146,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -175,7 +183,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   tab(_Tab.home, 'Home', Icons.home_rounded),
                   tab(_Tab.movies, 'Movies', Icons.movie_rounded),
                   tab(_Tab.shows, 'TV Shows', Icons.tv_rounded),
-                  if (lib.others.isNotEmpty) tab(_Tab.other, 'Other', Icons.folder_rounded),
+                  if (lib.unmatched.isNotEmpty) tab(_Tab.other, 'Unmatched (${lib.unmatched.length})', Icons.help_outline_rounded),
                   tab(_Tab.search, 'Search', Icons.search_rounded),
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -245,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case _Tab.shows:
         return _gridTab(lib.shows.map(_Entry.show).toList());
       case _Tab.other:
-        return _otherTab();
+        return lib.unmatched.isEmpty ? _homeTab() : _otherTab();
       case _Tab.search:
         return _searchTab();
     }
@@ -485,7 +493,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---------- Other ----------
+  // ---------- Unmatched ----------
   Widget _otherTab() {
     final pad = Layout.pad(context);
     return ListView(
@@ -493,16 +501,19 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
-          child: Text('Files that could not be matched on TMDB',
+          child: Text(
+              'TMDB could not identify these. Open one and press "Identify with TMDB" to pick the right title. '
+              'A TV show is shown once with all its seasons, so one match fixes every episode.',
               style: TextStyle(color: PX.muted)),
         ),
-        for (final f in lib.others)
+        for (final g in lib.unmatched)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: FocusCard(
               focusScale: 1.01,
               onTap: () async {
-                await PlayerScreen.open(context, [PlayItem(file: f, title: f.fileName)]);
+                await Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => UnmatchedScreen(group: g)));
                 if (mounted) setState(() {});
               },
               child: Container(
@@ -510,23 +521,34 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(14),
                 child: Row(
                   children: [
-                    const Icon(Icons.play_circle_fill_rounded, color: PX.accent, size: 28),
+                    Icon(g.isShow ? Icons.tv_rounded : Icons.movie_rounded, color: PX.accent, size: 28),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(f.fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
-                          if (f.itemName.isNotEmpty && f.itemName != f.fileName)
-                            Text(f.itemName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: PX.muted, fontSize: 12)),
+                          Text(
+                            g.title.isEmpty
+                                ? g.files.first.fileName
+                                : '${g.title}${g.year != null ? ' (${g.year})' : ''}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${g.isShow ? 'TV show' : 'Movie'}  •  ${g.summary}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: PX.muted, fontSize: 12),
+                          ),
                         ],
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Text(formatSize(f.size), style: const TextStyle(color: PX.muted)),
+                    Text(formatSize(g.size), style: const TextStyle(color: PX.muted)),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.chevron_right_rounded, color: PX.muted),
                   ],
                 ),
               ),

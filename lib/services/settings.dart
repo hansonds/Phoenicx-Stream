@@ -80,6 +80,33 @@ class AppSettings {
     await _p.remove('progress');
   }
 
+  // ---------- Manual TMDB matches chosen by the user ----------
+  // groupKey -> {'kind': 'movie' | 'tv', 'info': TmdbInfo json}
+  static Map<String, dynamic>? _overrides;
+
+  static Map<String, dynamic> get overrides {
+    if (_overrides != null) return _overrides!;
+    try {
+      _overrides = jsonDecode(_p.getString('overrides') ?? '{}') as Map<String, dynamic>;
+    } catch (_) {
+      _overrides = {};
+    }
+    return _overrides!;
+  }
+
+  static Future<void> setOverride(String groupKey, Map<String, dynamic>? value) async {
+    if (value == null) {
+      overrides.remove(groupKey);
+    } else {
+      overrides[groupKey] = value;
+    }
+    await _p.setString('overrides', jsonEncode(overrides));
+  }
+
+  // ---------- Player sound ----------
+  static double get volume => _p.getDouble('volume') ?? 100;
+  static set volume(double v) => _p.setDouble('volume', v);
+
   // ---------- Last library snapshot (for fast start) ----------
   static String? get librarySnapshot => _p.getString('library_files');
   static Future<void> saveLibrarySnapshot(String json) => _p.setString('library_files', json);

@@ -103,9 +103,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final pad = Layout.pad(context);
     return Scaffold(
-      appBar: widget.firstRun
-          ? null
-          : AppBar(title: const Text('Settings'), backgroundColor: PX.bg),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -113,6 +110,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: ListView(
               padding: EdgeInsets.all(pad),
               children: [
+                if (!widget.firstRun) ...[
+                  const Align(alignment: Alignment.centerLeft, child: NavButtons()),
+                  const SizedBox(height: 16),
+                  const Text('Settings', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 20),
+                ],
                 if (widget.firstRun) ...[
                   const SizedBox(height: 20),
                   Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../services/settings.dart';
 import '../services/tmdb.dart';
+import 'match_screen.dart';
 import 'player_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -47,6 +48,11 @@ class _Header extends StatelessWidget {
                 ),
               ),
             ),
+          Positioned(
+            left: pad,
+            top: MediaQuery.paddingOf(context).top + 12,
+            child: const NavButtons(),
+          ),
           Positioned(
             left: pad,
             right: pad,
@@ -195,9 +201,19 @@ class _MovieScreenState extends State<MovieScreen> {
                 onTap: () => _play(first),
               ),
               PillButton(
-                label: 'Back',
-                icon: Icons.arrow_back,
-                onTap: () => Navigator.of(context).pop(),
+                label: 'Fix match',
+                icon: Icons.manage_search_rounded,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => MatchScreen(
+                    query: m.info.title,
+                    year: m.info.year,
+                    tv: false,
+                    groupKeys: m.groupKeys,
+                    alreadyMatched: true,
+                    filesInfo: 'Now: ${m.info.title}${m.info.year != null ? ' (${m.info.year})' : ''}  •  '
+                        '${files.length} file${files.length == 1 ? '' : 's'}',
+                  ),
+                )),
               ),
             ],
           ),
@@ -406,9 +422,19 @@ class _ShowScreenState extends State<ShowScreen> {
                 onTap: () => _playEpisode(next),
               ),
               PillButton(
-                label: 'Back',
-                icon: Icons.arrow_back,
-                onTap: () => Navigator.of(context).pop(),
+                label: 'Fix match',
+                icon: Icons.manage_search_rounded,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => MatchScreen(
+                    query: show.info.title,
+                    year: show.info.year,
+                    tv: true,
+                    groupKeys: show.groupKeys,
+                    alreadyMatched: true,
+                    filesInfo: 'Now: ${show.info.title}  •  ${seasons.length} season'
+                        '${seasons.length == 1 ? '' : 's'} • $count episodes',
+                  ),
+                )),
               ),
             ],
           ),

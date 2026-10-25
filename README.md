@@ -12,7 +12,10 @@
 - Matches files to TMDB: posters, backdrops, ratings, descriptions, seasons and episode names
 - Movies, TV Shows, Recently Added, Continue Watching, Search
 - Built-in mpv player: MKV, HEVC, HDR, DTS, TrueHD, Atmos tracks, embedded subtitles — no transcoding
-- Audio and subtitle track picker, resume where you stopped, auto-plays the next episode
+- Sound panel: volume, mute, boost up to 150%, audio sync delay, audio track
+- Subtitle picker, resume where you stopped, auto-plays the next episode
+- **Fix match**: pick the right TMDB title by hand. Unidentified TV shows appear once with all seasons, so one match fixes every episode
+- Back and Home buttons on every screen
 - Works with touch, mouse/keyboard and TV remote (D-pad)
 - Your API keys stay on your device
 
@@ -42,7 +45,7 @@ Go to **Releases** and pick:
 | Play/Pause | Play / Pause |
 | Back | Hide controls, then exit |
 
-Windows: Space = play/pause, F or double-click = full screen, Esc = exit.
+Windows: Space = play/pause, Up/Down or mouse wheel = volume, M = mute, F or double-click = full screen, Esc = exit.
 
 ## Building
 
